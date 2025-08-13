@@ -1,0 +1,122 @@
+services:
+  # Redis for Dapr state store
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - dapr-network
+    # Zipkin for distributed tracing
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin123
+    networks:
+      - dapr-network
+  zipkin:
+    image: openzipkin/zipkin:2.24
+    ports:
+      - "9411:9411"
+    networks:
+      - dapr-network
+  # Dapr placement service
+  dapr-placement:
+    image: daprio/dapr:latest
+    command: ["./placement", "-port", "50006"]
+    ports:
+      - "50006:50006"
+    networks:
+      - dapr-network
+  dapr-scheduler:
+    image: "daprio/dapr:1.14.4"
+    command: ["./scheduler", "--port", "50007", "--etcd-data-dir=/var/lock/dapr/scheduler"]
+    ports:
+      - "50007:50007"
+    networks:
+      - dapr-network
+    # WARNING - This is a tmpfs volume, your state will not be persisted across restarts
+    # volumes:
+    # - type: tmpfs
+    #   target: /data
+    #   tmpfs:
+    #     size: "10000"
+  # Your FastAPI service (Service A)
+  service-a:
+    build: ./service-a
+    ports:
+      - "8000:8000"
+    environment:
+      - DAPR_HTTP_PORT=3501
+      - DAPR_GRPC_PORT=50001
+      - DAPR_API_PROTOCOL=http
+    depends_on:
+      - redis
+      - dapr-placement
+    networks:
+      - dapr-network
+  # Dapr sidecar for Service A
+  service-a-dapr:
+    image: daprio/dapr:latest
+    restart: on-failure
+    command: [
+      "./daprd",
+      "-app-id", "service-a",
+      "-app-port", "8000",
+      "-dapr-http-port", "3501",
+      "-dapr-grpc-port", "50001",
+      "-scheduler-host-address", "dapr-scheduler:50007",
+      "-placement-host-address", "dapr-placement:50006",
+      "-components-path", "/components",
+    ]
+    volumes:
+      - "./components/:/components"
+     
+    depends_on:
+      - service-a
+      - redis
+      - rabbitmq
+      - dapr-placement
+    network_mode: "service:service-a"
+  service-b:
+    build: ./service-b
+    environment:
+      - DAPR_HTTP_PORT=3502
+      - DAPR_GRPC_PORT=50002
+      - DAPR_API_PROTOCOL=http
+    ports:
+      - "8001:8000"
+    depends_on:
+      - redis
+      - dapr-placement
+    networks:
+      - dapr-network
+  service-b-dapr:
+    image: daprio/dapr:latest
+    restart: on-failure
+    command: [
+      "./daprd",
+      "-app-id", "service-b",
+      "-app-port", "8000",
+      "-dapr-http-port", "3502",
+      "-dapr-grpc-port", "50002",
+      "-scheduler-host-address", "dapr-scheduler:50007",
+      "-placement-host-address", "dapr-placement:50006",
+      "-components-path", "/components",
+    ]
+    volumes:
+      - "./components/:/components"
+    
+    depends_on:
+      - service-b
+      - rabbitmq
+      - redis
+      - dapr-placement
+    network_mode: "service:service-b"
+
+networks:
+  dapr-network:
+    driver: bridge
