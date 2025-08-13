@@ -1,2 +1,2 @@
 # Dapr-Samples
-A dapr sample containing three microservices that  communicate between each other.
+Dapr samples containing codes that create microservices that communicate between each other.
